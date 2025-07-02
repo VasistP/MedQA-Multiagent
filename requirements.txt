@@ -1,0 +1,11 @@
+# requirements.txt
+openai>=1.0.0
+pandas
+numpy
+tqdm
+prettytable
+termcolor
+python-dotenv
+wandb
+requests
+jsonlines

@@ -1,0 +1,18 @@
+# Ignore environment variable files
+.env
+
+# Ignore Python virtual environment
+multiagent/
+
+# Ignore logs
+logs/
+
+# Ignore data folder
+data/
+
+# Ignore Python test files
+test_*.py
+*_test.py
+
+tempCodeRunnerFile.py
+_pycache_/
