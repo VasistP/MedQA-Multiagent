@@ -16,3 +16,6 @@ test_*.py
 
 tempCodeRunnerFile.py
 _pycache_/
+*.pyc
+*.pyo
+*.pyd

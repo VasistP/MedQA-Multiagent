@@ -1,5 +1,5 @@
 # src/agents/recruiter.py (updated version)
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
 import random
 from collections import Counter
 from .base_agent import BaseAgent
@@ -235,7 +235,7 @@ class RecruiterAgent(BaseAgent):
         return teams
 
     def generate_recruitment_explanation(self, question: str, complexity: str,
-                                         recruited_agents: List[Dict]) -> str:
+                                         recruited_agents: Union[List[Dict], Dict[str, List[Dict]]]) -> str:
         """Generate explanation for recruitment choices"""
 
         # For moderate/low complexity
@@ -244,7 +244,7 @@ class RecruiterAgent(BaseAgent):
                            for agent in recruited_agents]
             specialist_str = ", ".join([f"{s[0]} (relevance: {s[1]:.2f})"
                                        for s in specialists[:5]])
-        else:
+        elif isinstance(recruited_agents, dict):
             # For high complexity (teams)
             all_specialists = []
             for team in recruited_agents.values():
