@@ -221,3 +221,43 @@ Keep response under 50 words."""
 
         response, _ = self.chat(prompt, temperature=0.5)
         return response
+
+    def get_current_preference(self) -> str:
+        """Get current preference based on discussion history"""
+        # If we have a recent vote, use that
+        if self.vote and 'choice' in self.vote:
+            return self.vote['choice']
+
+        # Otherwise, use initial assessment
+        if self.silent_assessment and 'recommended_answer' in self.silent_assessment:
+            return self.silent_assessment['recommended_answer']
+
+        return None
+
+    def receive_feedback(self, feedback: str):
+        """Process moderator feedback and update thinking"""
+        # Store feedback
+        self.discussion_history.append({
+            'type': 'moderator_feedback',
+            'content': feedback,
+            'processed': False
+        })
+
+        # Process feedback to potentially update perspective
+        reflection_prompt = f"""You have received the following feedback from the moderator:
+
+{feedback}
+
+As a {self.specialty}, briefly reflect on:
+1. How this feedback relates to your specialty perspective
+2. Any aspects you may have overlooked
+3. Whether this changes your current position
+
+Keep response under 100 words."""
+
+        response, _ = self.chat(reflection_prompt, temperature=0.6)
+
+        self.discussion_history[-1]['reflection'] = response
+        self.discussion_history[-1]['processed'] = True
+
+        print(f"  {self.specialty} processed feedback")

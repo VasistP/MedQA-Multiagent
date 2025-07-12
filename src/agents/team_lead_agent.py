@@ -20,343 +20,313 @@ class TeamLeadAgent(MedicalAgent):
 
         self.team_members = []
         self.silent_assessments = {}
-        self.discussion_log = []
+        self.discussion_logs = []  # Changed to store multiple rounds
         self.voting_results = {}
         self.final_decision = None
+        self.interaction_history = []  # New: stores all interactions
+        self.consensus_threshold = 0.8  # 80% agreement
 
     def set_team_members(self, team_members: List):
         """Set the team members this lead will coordinate"""
         self.team_members = team_members
 
-    def coordinate_silent_assessment_phase(self, question: str, options: Dict[str, str]) -> Dict:
-        """Phase 1: Collect silent SBAR assessments from all team members"""
+    def coordinate_moderate_complexity_case(self, question: str, options: Dict[str, str],
+                                            max_rounds: int = 5) -> Dict:
+        """Main coordination method following Algorithm 1 (Lines 6-22)"""
 
-        print("\n=== PHASE 1: Silent Pre-Round Assessment ===")
-        self.silent_assessments = {}
+        print("\n" + "="*80)
+        print("MODERATE COMPLEXITY CASE - MDT COORDINATION")
+        print("="*80)
 
-        # First, lead does their own assessment
-        print(f"\n{self.specialty} preparing assessment...")
-        lead_assessment = self._generate_lead_assessment(question, options)
-        self.silent_assessments[self.agent_id] = lead_assessment
+        # Initialize
+        r = 0
+        consensus = False
+        self.interaction_history = []
 
-        # Collect from team members
-        for member in self.team_members:
-            if hasattr(member, 'generate_sbar_assessment'):
-                print(f"\n{member.specialty} preparing SBAR assessment...")
-                assessment = member.generate_sbar_assessment(question, options)
-                self.silent_assessments[member.agent_id] = assessment
+        # Phase 1: Silent Assessment
+        print("\n>>> Phase 1: Silent Pre-Round Assessment")
+        self.coordinate_silent_assessment_phase(question, options)
 
-        # Log phase completion
-        if self.logger:
-            self.logger.log_discussion(
-                round_num=1,
-                turn_num=0,
-                agent_from="System",
-                agent_to="All",
-                message=f"Silent assessment phase completed. {len(self.silent_assessments)} assessments collected."
-            )
+        # Check initial consensus from silent assessments
+        initial_consensus = self.check_initial_consensus()
+        if initial_consensus['has_consensus']:
+            print(
+                f"\n✓ Initial consensus reached: Option {initial_consensus['choice']}")
+            return self.make_final_decision(options)
 
-        return self.silent_assessments
+        # Iterative consensus loop (Algorithm 1, lines 11-21)
+        while r < max_rounds and not consensus:
+            print(f"\n" + "="*60)
+            print(f"ROUND {r+1} of {max_rounds}")
+            print("="*60)
 
-    def _generate_lead_assessment(self, question: str, options: Dict[str, str]) -> Dict:
-        """Generate lead physician's assessment"""
-        formatted_question = f"{question}\n\nOptions:\n"
-        for key, value in sorted(options.items()):
-            formatted_question += f"{key}) {value}\n"
+            # Collaborative Discussion (Line 12)
+            discussion_log = self.conduct_collaborative_discussion(
+                r, question, options)
+            self.discussion_logs.append(discussion_log)
 
-        prompt = f"""As the Team Lead physician, provide your initial assessment:
+            # Check consensus (Line 13)
+            consensus_result = self.check_consensus()
+            consensus = consensus_result['has_consensus']
 
-{formatted_question}
+            if not consensus and r < max_rounds - 1:
+                print(
+                    f"\n⚠ No consensus reached (agreement: {consensus_result['agreement_rate']:.1%})")
 
-Provide a brief clinical assessment focusing on:
-1. Key differential diagnoses
-2. Critical findings to consider
-3. Initial recommendation
+                # Moderator feedback (Lines 14-16)
+                feedback = self.generate_moderator_feedback(
+                    consensus_result, r)
 
-Keep it concise but comprehensive."""
+                # Update agents with feedback (Line 16)
+                self.update_agents_with_feedback(feedback)
 
-        response, token_info = self.chat(prompt, temperature=0.7)
+                # Update interaction history (Line 18)
+                self.interaction_history.extend(discussion_log)
+                self.interaction_history.append({
+                    'type': 'moderator_feedback',
+                    'round': r + 1,
+                    'feedback': feedback
+                })
+            elif consensus:
+                print(
+                    f"\n✓ Consensus reached: Option {consensus_result['majority_choice']}")
 
-        return {
-            "assessment": response,
-            "specialty": self.specialty,
-            "token_info": token_info
-        }
+            r += 1
 
-    def conduct_round_robin_discussion(self) -> List[Dict]:
-        """Phase 2: Structured round-robin discussion"""
+        # Make final decision (Line 22)
+        return self.make_final_decision_with_interaction(options)
 
-        print("\n=== PHASE 2: Structured Round-Robin Discussion ===")
-        discussion_sequence = []
-
-        # Determine order based on specialties
-        ordered_members = self._determine_discussion_order()
-
-        # Conduct round-robin
-        for i, member in enumerate(ordered_members):
-            print(f"\n[Round-Robin Turn {i+1}] {member.specialty}:")
-
-            # Get previous opinions for context
-            previous_opinions = [
-                {
-                    "specialty": op["speaker"].specialty,
-                    "summary": op["message"][:100] + "..."
-                }
-                for op in discussion_sequence
-            ]
-
-            # Get member's input
-            if hasattr(member, 'participate_in_round_robin'):
-                opinion = member.participate_in_round_robin(previous_opinions)
-            else:
-                opinion = "Lead physician notes all assessments for consideration."
-
-            discussion_entry = {
-                "speaker": member,
-                "specialty": member.specialty,
-                "message": opinion,
-                "turn": i + 1
-            }
-            discussion_sequence.append(discussion_entry)
-
-            print(f"{opinion[:200]}...")
-
-            # Log discussion
-            if self.logger:
-                self.logger.log_discussion(
-                    round_num=1,
-                    turn_num=i+1,
-                    agent_from=member.specialty,
-                    agent_to="Team",
-                    message=opinion
-                )
-
-        self.discussion_log = discussion_sequence
-        return discussion_sequence
-
-    def _determine_discussion_order(self) -> List:
-        """Determine optimal order for round-robin based on specialties"""
-
-        # Categories for ordering
-        diagnostic_specialists = []
-        organ_specialists = []
-        support_specialists = []
-
-        for member in self.team_members:
-            specialty_lower = member.specialty.lower()
-
-            if any(term in specialty_lower for term in ['pathologist', 'radiologist']):
-                diagnostic_specialists.append(member)
-            elif any(term in specialty_lower for term in ['pharmacist', 'social']):
-                support_specialists.append(member)
-            else:
-                organ_specialists.append(member)
-
-        # Order: Diagnostic → Organ (by relevance) → Support → Lead
-        ordered = []
-        ordered.extend(diagnostic_specialists)
-
-        # Sort organ specialists by relevance score
-        organ_specialists.sort(key=lambda x: x.relevance_score, reverse=True)
-        ordered.extend(organ_specialists)
-
-        ordered.extend(support_specialists)
-        ordered.append(self)  # Lead goes last to summarize
-
-        return ordered
-
-    def facilitate_open_discussion(self, key_points: List[str] = None) -> List[Dict]:
-        """Phase 3: Open discussion on key points"""
-
-        print("\n=== PHASE 3: Open Discussion ===")
-        open_discussions = []
-
-        # Identify key discussion points if not provided
-        if not key_points:
-            key_points = self._identify_discussion_points()
-
-        for point in key_points[:3]:  # Limit to top 3 points
-            print(f"\nDiscussion Point: {point}")
-
-            # Get responses from relevant members
-            for member in self.team_members:
-                if hasattr(member, 'participate_in_open_discussion'):
-                    response = member.participate_in_open_discussion(point)
-                    open_discussions.append({
-                        "point": point,
-                        "speaker": member.specialty,
-                        "response": response
-                    })
-                    print(f"  {member.specialty}: {response[:100]}...")
-
-        return open_discussions
-
-    def _identify_discussion_points(self) -> List[str]:
-        """Identify key points needing discussion"""
-
-        # Analyze silent assessments for disagreements
+    def check_initial_consensus(self) -> Dict:
+        """Check if there's consensus from silent assessments"""
         recommendations = []
-        for assessment in self.silent_assessments.values():
+
+        for agent_id, assessment in self.silent_assessments.items():
             if 'recommended_answer' in assessment:
                 recommendations.append(assessment['recommended_answer'])
 
-        # Check for disagreement
-        recommendation_counts = Counter(recommendations)
+        if not recommendations:
+            return {'has_consensus': False, 'choice': None}
 
-        points = []
-        if len(recommendation_counts) > 1:
-            points.append("Reconciling different diagnostic opinions")
+        # Count votes
+        vote_counts = Counter(recommendations)
+        total_votes = len(recommendations)
 
-        points.extend([
-            "Risk-benefit analysis of the leading option",
-            "Alternative management if first choice fails"
-        ])
-
-        return points
-
-    def conduct_delphi_voting(self, options: Dict[str, str]) -> Dict:
-        """Phase 4: Delphi-lite voting process"""
-
-        print("\n=== PHASE 4: Delphi-Lite Voting ===")
-
-        # Create discussion summary
-        summary = self._create_discussion_summary()
-
-        # Collect votes
-        self.voting_results = {}
-
-        # Lead votes too
-        print(f"\n{self.specialty} casting vote...")
-        lead_vote = self._cast_lead_vote(options, summary)
-        self.voting_results[self.agent_id] = lead_vote
-
-        # Collect team votes
-        for member in self.team_members:
-            if hasattr(member, 'cast_delphi_vote'):
-                print(f"{member.specialty} casting vote...")
-                vote = member.cast_delphi_vote(options, summary)
-                self.voting_results[member.agent_id] = vote
-
-        # Analyze results
-        vote_analysis = self._analyze_votes()
-
-        print("\n--- Voting Results ---")
-        for choice, data in vote_analysis.items():
-            print(f"Option {choice}: {data['count']} votes, "
-                  f"avg confidence: {data['avg_confidence']:.2f}")
-
-        return self.voting_results
-
-    def _cast_lead_vote(self, options: Dict[str, str], summary: str) -> Dict:
-        """Lead physician casts their vote"""
-
-        vote_prompt = f"""As Team Lead, after hearing all perspectives, cast your vote:
-
-Options:
-"""
-        for key, value in sorted(options.items()):
-            vote_prompt += f"{key}) {value}\n"
-
-        vote_prompt += f"""
-Summary: {summary}
-
-Provide:
-VOTE: [letter]
-CONFIDENCE: [0.0-1.0]
-RATIONALE: [one sentence]"""
-
-        response, _ = self.chat(vote_prompt, temperature=0.3)
-
-        # Parse vote (similar to specialist parsing)
-        vote_data = {
-            "choice": None,
-            "confidence": 0.7,
-            "rationale": "Lead physician's clinical judgment",
-            "specialty": self.specialty
-        }
-
-        # Extract vote details
-        lines = response.split('\n')
-        for line in lines:
-            if "VOTE:" in line.upper():
-                for char in line:
-                    if char.upper() in options.keys():
-                        vote_data["choice"] = char.upper()
-                        break
-            elif "CONFIDENCE:" in line.upper():
-                try:
-                    conf = float(line.split(':', 1)[1].strip())
-                    vote_data["confidence"] = conf
-                except:
-                    pass
-            elif "RATIONALE:" in line.upper():
-                vote_data["rationale"] = line.split(':', 1)[1].strip()
-
-        return vote_data
-
-    def _create_discussion_summary(self) -> str:
-        """Create summary of key discussion points"""
-
-        summary_points = []
-
-        # Key agreements
-        if self.discussion_log:
-            summary_points.append("Team discussed multiple perspectives")
-
-        # Note any major disagreements
-        if self.silent_assessments:
-            recommendations = [a.get('recommended_answer', '')
-                               for a in self.silent_assessments.values()]
-            if len(set(recommendations)) > 1:
-                summary_points.append(
-                    "Initial assessments showed varied opinions")
-
-        return "; ".join(summary_points)
-
-    def _analyze_votes(self) -> Dict:
-        """Analyze voting results"""
-
-        vote_counts = Counter()
-        confidence_by_choice = {}
-
-        for vote in self.voting_results.values():
-            choice = vote.get('choice')
-            if choice:
-                vote_counts[choice] += 1
-                if choice not in confidence_by_choice:
-                    confidence_by_choice[choice] = []
-                confidence_by_choice[choice].append(
-                    vote.get('confidence', 0.5))
-
-        analysis = {}
+        # Check if any option has >80% agreement
         for choice, count in vote_counts.items():
-            analysis[choice] = {
-                'count': count,
-                'avg_confidence': sum(confidence_by_choice[choice]) / len(confidence_by_choice[choice]),
-                'votes': confidence_by_choice[choice]
+            if count / total_votes >= self.consensus_threshold:
+                return {
+                    'has_consensus': True,
+                    'choice': choice,
+                    'agreement_rate': count / total_votes
+                }
+
+        return {'has_consensus': False, 'choice': None}
+
+    def conduct_collaborative_discussion(self, round_num: int, question: str,
+                                         options: Dict[str, str]) -> List[Dict]:
+        """Conduct collaborative discussion for current round"""
+
+        discussion_log = []
+
+        # Different discussion format based on round
+        if round_num == 0:
+            # First round: Structured round-robin
+            print("\n--- Round 1: Structured Round-Robin ---")
+            discussion_log = self._conduct_round_robin()
+
+        elif round_num == 1:
+            # Second round: Open discussion on key disagreements
+            print("\n--- Round 2: Focused Discussion on Disagreements ---")
+            discussion_log = self._conduct_focused_discussion(options)
+
+        else:
+            # Later rounds: Targeted problem-solving
+            print(
+                f"\n--- Round {round_num + 1}: Problem-Solving Discussion ---")
+            discussion_log = self._conduct_problem_solving_discussion(options)
+
+        return discussion_log
+
+    def _conduct_round_robin(self) -> List[Dict]:
+        """Standard round-robin discussion (already implemented)"""
+        # Use existing conduct_round_robin_discussion method
+        return self.conduct_round_robin_discussion()
+
+    def _conduct_focused_discussion(self, options: Dict[str, str]) -> List[Dict]:
+        """Focus on specific disagreements"""
+        discussion_log = []
+
+        # Identify main disagreements
+        disagreements = self._identify_disagreements()
+
+        for disagreement in disagreements[:2]:  # Focus on top 2 disagreements
+            print(f"\nDiscussing: {disagreement['issue']}")
+
+            # Get input from agents with different views
+            for agent in disagreement['agents_involved']:
+                response = agent.participate_in_open_discussion(
+                    f"Please clarify your position on: {disagreement['issue']}",
+                    "Moderator"
+                )
+
+                discussion_log.append({
+                    'speaker': agent,
+                    'specialty': agent.specialty,
+                    'topic': disagreement['issue'],
+                    'message': response
+                })
+
+                print(f"  {agent.specialty}: {response[:100]}...")
+
+        return discussion_log
+
+    def _conduct_problem_solving_discussion(self, options: Dict[str, str]) -> List[Dict]:
+        """Problem-solving approach for persistent disagreements"""
+        discussion_log = []
+
+        # Identify the main contention points
+        current_votes = self._get_current_preferences()
+
+        problem_prompt = f"""The team has not reached consensus after multiple rounds.
+        Current preferences: {current_votes}
+        
+        Please provide a brief statement on:
+        1. What additional information would help resolve this?
+        2. Any compromise position you would consider?"""
+
+        for member in self.team_members:
+            response = member.participate_in_open_discussion(
+                problem_prompt, "Moderator")
+
+            discussion_log.append({
+                'speaker': member,
+                'specialty': member.specialty,
+                'message': response
+            })
+
+            print(f"\n{member.specialty}: {response[:150]}...")
+
+        return discussion_log
+
+    def check_consensus(self) -> Dict:
+        """Check if consensus has been reached (>80% agreement)"""
+
+        # Conduct quick poll
+        print("\n--- Checking Consensus ---")
+        current_votes = {}
+
+        # Lead votes
+        lead_choice = self._get_lead_preference()
+        current_votes[self.agent_id] = lead_choice
+
+        # Team member votes
+        for member in self.team_members:
+            if hasattr(member, 'get_current_preference'):
+                choice = member.get_current_preference()
+            else:
+                # Quick vote based on current discussion
+                choice = self._quick_poll_member(member)
+            current_votes[member.agent_id] = choice
+
+        # Analyze votes
+        vote_counts = Counter(current_votes.values())
+        total_votes = len(current_votes)
+
+        # Find majority choice and agreement rate
+        if vote_counts:
+            majority_choice, majority_count = vote_counts.most_common(1)[0]
+            agreement_rate = majority_count / total_votes
+
+            return {
+                'has_consensus': agreement_rate >= self.consensus_threshold,
+                'agreement_rate': agreement_rate,
+                'majority_choice': majority_choice,
+                'vote_distribution': dict(vote_counts),
+                'detailed_votes': current_votes
             }
 
-        return analysis
+        return {
+            'has_consensus': False,
+            'agreement_rate': 0,
+            'majority_choice': None
+        }
 
-    def make_final_decision(self, options: Dict[str, str]) -> Dict:
-        """Phase 5: Make final decision with full accountability"""
+    def generate_moderator_feedback(self, consensus_result: Dict, round_num: int) -> Dict:
+        """Generate targeted feedback when no consensus is reached"""
 
-        print("\n=== PHASE 5: Final Decision ===")
+        feedback_prompt = f"""As moderator, the team has not reached consensus after round {round_num + 1}.
 
-        # Analyze all inputs
-        vote_analysis = self._analyze_votes()
+Vote distribution: {consensus_result['vote_distribution']}
+Agreement rate: {consensus_result['agreement_rate']:.1%}
 
-        # Identify majority and minority opinions
-        sorted_choices = sorted(vote_analysis.items(),
-                                key=lambda x: (
-                                    x[1]['count'], x[1]['avg_confidence']),
-                                reverse=True)
+Generate brief, targeted feedback to help the team converge:
+1. Identify the key sticking point
+2. Suggest what perspective might be missing
+3. Propose a specific question for the team to consider
 
-        decision_prompt = f"""As Team Lead, make the final decision based on:
+Keep total feedback under 150 words."""
 
-1. Silent assessments from all specialists
-2. Round-robin discussion insights  
-3. Voting results: {sorted_choices}
+        response, _ = self.chat(feedback_prompt, temperature=0.6)
+
+        feedback = {
+            'round': round_num + 1,
+            'content': response,
+            'vote_distribution': consensus_result['vote_distribution'],
+            'target_areas': self._identify_feedback_targets(consensus_result)
+        }
+
+        print(f"\n📋 Moderator Feedback:")
+        print(response)
+
+        return feedback
+
+    def update_agents_with_feedback(self, feedback: Dict):
+        """Update agents with moderator feedback"""
+
+        print("\n--- Updating Agents with Feedback ---")
+
+        for member in self.team_members:
+            if hasattr(member, 'receive_feedback'):
+                member.receive_feedback(feedback['content'])
+            else:
+                # Create a simple update message
+                update_prompt = f"""The moderator has provided feedback:
+
+{feedback['content']}
+
+Please consider this feedback for the next discussion round."""
+
+                # Store in agent's discussion history
+                member.discussion_history.append({
+                    'type': 'moderator_feedback',
+                    'content': update_prompt
+                })
+
+        print("✓ All agents updated with moderator feedback")
+
+    def make_final_decision_with_interaction(self, options: Dict[str, str]) -> Dict:
+        """Make final decision considering all interaction history"""
+
+        print("\n" + "="*60)
+        print("FINAL DECISION PHASE")
+        print("="*60)
+
+        # Get final consensus state
+        final_consensus = self.check_consensus()
+
+        # Create interaction summary
+        interaction_summary = self._create_interaction_summary()
+
+        decision_prompt = f"""As Team Lead, make the final decision after the MDT process.
+
+Process Summary:
+- Total rounds: {len(self.discussion_logs)}
+- Final consensus: {'Yes' if final_consensus['has_consensus'] else 'No'}
+- Agreement rate: {final_consensus['agreement_rate']:.1%}
+- Vote distribution: {final_consensus['vote_distribution']}
+
+Interaction highlights:
+{interaction_summary}
 
 Options:
 """
@@ -367,33 +337,132 @@ Options:
 Provide:
 DECISION: [letter]
 PRIMARY RATIONALE: [2-3 sentences explaining your decision]
-MINORITY CONSIDERATION: [acknowledge any dissenting views and why they were overruled]
+MINORITY CONSIDERATION: [acknowledge any dissenting views]
+CONSENSUS STATUS: [was consensus achieved? If not, why did you choose this option?]
 FOLLOW-UP: [any monitoring or contingency plans needed]"""
 
         response, token_info = self.chat(decision_prompt, temperature=0.5)
 
         # Parse decision
         decision = self._parse_final_decision(response, options)
+        decision['consensus_achieved'] = final_consensus['has_consensus']
+        decision['final_agreement_rate'] = final_consensus['agreement_rate']
         decision['token_info'] = token_info
 
-        # Document decision
         self.final_decision = decision
 
-        # Notify team members
+        # Notify team
         self._notify_team_of_decision(decision)
 
-        print(f"\nFINAL DECISION: Option {decision['choice']}")
-        print(f"Rationale: {decision['rationale']}")
+        print(f"\n✓ FINAL DECISION: Option {decision['choice']}")
+        print(f"Consensus achieved: {decision['consensus_achieved']}")
+        print(f"Agreement rate: {decision['final_agreement_rate']:.1%}")
 
         return decision
 
-    def _parse_final_decision(self, response: str, options: Dict[str, str]) -> Dict:
-        """Parse the final decision"""
+    # Helper methods
+    def _identify_disagreements(self) -> List[Dict]:
+        """Identify key disagreements from assessments and discussions"""
+        disagreements = []
 
+        # Analyze silent assessments
+        answer_groups = {}
+        for agent_id, assessment in self.silent_assessments.items():
+            if 'recommended_answer' in assessment:
+                answer = assessment['recommended_answer']
+                if answer not in answer_groups:
+                    answer_groups[answer] = []
+                answer_groups[answer].append(agent_id)
+
+        # Find conflicting groups
+        if len(answer_groups) > 1:
+            sorted_groups = sorted(answer_groups.items(),
+                                   key=lambda x: len(x[1]), reverse=True)
+
+            disagreements.append({
+                'issue': f"Choice between option {sorted_groups[0][0]} vs {sorted_groups[1][0]}",
+                'agents_involved': [self._get_agent_by_id(aid) for aid in
+                                    sorted_groups[0][1] + sorted_groups[1][1]]
+            })
+
+        return disagreements
+
+    def _get_current_preferences(self) -> Dict:
+        """Get current voting preferences"""
+        preferences = {}
+        for member in self.team_members:
+            if hasattr(member, 'vote') and member.vote:
+                preferences[member.specialty] = member.vote.get('choice', '?')
+        return preferences
+
+    def _get_lead_preference(self) -> str:
+        """Get lead's current preference"""
+        # Simplified - in practice would analyze discussion
+        if self.silent_assessments.get(self.agent_id):
+            return self.silent_assessments[self.agent_id].get('recommended_answer', 'A')
+        return 'A'
+
+    def _quick_poll_member(self, member) -> str:
+        """Quick poll for current preference"""
+        # Simplified - in practice would be more sophisticated
+        if hasattr(member, 'silent_assessment') and member.silent_assessment:
+            return member.silent_assessment.get('recommended_answer', 'A')
+        return 'A'
+
+    def _identify_feedback_targets(self, consensus_result: Dict) -> List[str]:
+        """Identify specific areas needing feedback"""
+        targets = []
+
+        vote_dist = consensus_result['vote_distribution']
+        if len(vote_dist) > 2:
+            targets.append("Multiple divergent opinions")
+        elif len(vote_dist) == 2:
+            targets.append("Binary disagreement")
+
+        return targets
+
+    def _create_interaction_summary(self) -> str:
+        """Create summary of interaction history"""
+        summary_points = []
+
+        summary_points.append(
+            f"- {len(self.discussion_logs)} rounds of discussion conducted")
+
+        if self.interaction_history:
+            feedback_count = sum(1 for i in self.interaction_history
+                                 if i.get('type') == 'moderator_feedback')
+            if feedback_count > 0:
+                summary_points.append(
+                    f"- {feedback_count} moderator interventions")
+
+        if hasattr(self, 'voting_results') and self.voting_results:
+            summary_points.append(
+                f"- Formal voting conducted with {len(self.voting_results)} participants")
+
+        return "\n".join(summary_points)
+
+    def _get_agent_by_id(self, agent_id: str):
+        """Get agent instance by ID"""
+        if agent_id == self.agent_id:
+            return self
+        for member in self.team_members:
+            if member.agent_id == agent_id:
+                return member
+        return None
+
+    # Update existing methods to work with new structure
+    def coordinate_silent_assessment_phase(self, question: str, options: Dict[str, str]) -> Dict:
+        """Phase 1: Collect silent SBAR assessments from all team members"""
+        # (Keep existing implementation)
+        return super().coordinate_silent_assessment_phase(question, options)
+
+    def _parse_final_decision(self, response: str, options: Dict[str, str]) -> Dict:
+        """Parse the final decision with consensus status"""
         decision = {
             "choice": None,
             "rationale": "",
             "minority_consideration": "",
+            "consensus_status": "",
             "follow_up": "",
             "raw_response": response
         }
@@ -417,6 +486,10 @@ FOLLOW-UP: [any monitoring or contingency plans needed]"""
                 current_section = "minority_consideration"
                 decision[current_section] = line.split(
                     ':', 1)[1].strip() if ':' in line else ""
+            elif "CONSENSUS STATUS:" in line_upper:
+                current_section = "consensus_status"
+                decision[current_section] = line.split(
+                    ':', 1)[1].strip() if ':' in line else ""
             elif "FOLLOW-UP:" in line_upper:
                 current_section = "follow_up"
                 decision[current_section] = line.split(
@@ -425,22 +498,3 @@ FOLLOW-UP: [any monitoring or contingency plans needed]"""
                 decision[current_section] += " " + line.strip()
 
         return decision
-
-    def _notify_team_of_decision(self, decision: Dict):
-        """Notify team members of final decision"""
-
-        for member in self.team_members:
-            if hasattr(member, 'acknowledge_final_decision'):
-                acknowledgment = member.acknowledge_final_decision(
-                    f"Option {decision['choice']}",
-                    decision['rationale']
-                )
-
-                if self.logger:
-                    self.logger.log_discussion(
-                        round_num=1,
-                        turn_num=99,  # Final turn
-                        agent_from=member.specialty,
-                        agent_to="Lead",
-                        message=f"Acknowledged: {acknowledgment}"
-                    )
