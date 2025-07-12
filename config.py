@@ -7,9 +7,9 @@ load_dotenv()
 
 # API Configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-MODEL_NAME = "gpt-3.5-turbo"  # Cost-effective model
+MODEL_NAME = "gpt-4o"  # Cost-effective model
 MAX_TOKENS = 1500
-TEMPERATURE = 0.7
+TEMPERATURE = 0.5
 
 # Dataset Configuration
 MEDQA_PATH = "./data/medqa/"

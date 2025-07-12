@@ -9,7 +9,7 @@ class MedicalAgent(BaseAgent):
 
     def __init__(self, specialty: str, agent_id: str, expertise: str,
                  relevance_score: float = 1.0, decision_weight: float = None,
-                 model: str = "gpt-3.5-turbo", logger=None):
+                 model: str = "gpt-4o", logger=None):
 
         # Create personalized instruction based on specialty
         instruction = f"""You are a {specialty} with expertise in {expertise}.
@@ -108,5 +108,5 @@ As a {self.specialty}, please:
 3. Add any insights from your expertise
 4. Suggest how to reconcile different views if applicable"""
 
-        response, _ = self.chat(prompt, temperature=0.7)
+        response, _ = self.chat(prompt, temperature=0.5)
         return response

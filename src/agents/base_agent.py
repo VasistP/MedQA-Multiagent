@@ -8,7 +8,7 @@ import os
 class BaseAgent:
     """Base class for all agents in the MDAgents system"""
 
-    def __init__(self, role: str, instruction: str, model: str = "gpt-3.5-turbo",
+    def __init__(self, role: str, instruction: str, model: str = "gpt-4o",
                  few_shot_examples: List[Dict] = None, logger=None):
         self.role = role
         self.instruction = instruction
@@ -43,7 +43,7 @@ class BaseAgent:
 
         return messages
 
-    def chat(self, message: str, temperature: float = 0.7) -> Tuple[str, Dict]:
+    def chat(self, message: str, temperature: float = 0.5) -> Tuple[str, Dict]:
         """Send message to OpenAI API and get response"""
         messages = self.create_messages(message)
 
