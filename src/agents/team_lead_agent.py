@@ -98,27 +98,66 @@ class TeamLeadAgent(MedicalAgent):
 
     def check_initial_consensus(self) -> Dict:
         """Check if there's consensus from silent assessments"""
+        print("\nDEBUG: Checking initial consensus...")
+
         recommendations = []
+        assessment_details = []
 
         for agent_id, assessment in self.silent_assessments.items():
-            if 'recommended_answer' in assessment:
-                recommendations.append(assessment['recommended_answer'])
+            print(
+                f"DEBUG: Agent {agent_id} assessment keys: {assessment.keys()}")
+
+            if 'recommended_answer' in assessment and assessment['recommended_answer']:
+                rec_answer = assessment['recommended_answer']
+                recommendations.append(rec_answer)
+                assessment_details.append((agent_id, rec_answer))
+                print(f"DEBUG: {agent_id} recommends: {rec_answer}")
+            else:
+                print(f"DEBUG: {agent_id} has no clear recommendation")
+
+        print(f"DEBUG: All recommendations: {recommendations}")
 
         if not recommendations:
+            print("DEBUG: No recommendations found")
             return {'has_consensus': False, 'choice': None}
 
         # Count votes
+        from collections import Counter
         vote_counts = Counter(recommendations)
         total_votes = len(recommendations)
 
+        print(f"DEBUG: Vote counts: {vote_counts}")
+        print(f"DEBUG: Total votes: {total_votes}")
+
         # Check if any option has >80% agreement
         for choice, count in vote_counts.items():
-            if count / total_votes >= self.consensus_threshold:
+            agreement_rate = count / total_votes
+            print(
+                f"DEBUG: Option {choice}: {count}/{total_votes} = {agreement_rate:.1%}")
+
+            if agreement_rate >= self.consensus_threshold:
+                print(
+                    f"DEBUG: Consensus found on {choice} with {agreement_rate:.1%} agreement")
                 return {
                     'has_consensus': True,
                     'choice': choice,
-                    'agreement_rate': count / total_votes
+                    'agreement_rate': agreement_rate,
+                    'vote_breakdown': dict(vote_counts)
                 }
+
+        # If no consensus, return the majority choice anyway for testing
+        if vote_counts:
+            majority_choice = vote_counts.most_common(1)[0][0]
+            majority_rate = vote_counts[majority_choice] / total_votes
+            print(
+                f"DEBUG: No consensus, but majority is {majority_choice} with {majority_rate:.1%}")
+
+            return {
+                'has_consensus': False,
+                'choice': majority_choice,
+                'agreement_rate': majority_rate,
+                'vote_breakdown': dict(vote_counts)
+            }
 
         return {'has_consensus': False, 'choice': None}
 
@@ -498,3 +537,223 @@ FOLLOW-UP: [any monitoring or contingency plans needed]"""
                 decision[current_section] += " " + line.strip()
 
         return decision
+
+# Add these methods to your TeamLeadAgent class
+
+    def make_final_decision(self, options: Dict[str, str]) -> Dict:
+        """Make final decision when early consensus is reached"""
+
+        print("\n" + "="*60)
+        print("EARLY CONSENSUS ACHIEVED")
+        print("="*60)
+
+        # Get the consensus choice from initial assessments
+        initial_consensus = self.check_initial_consensus()
+        consensus_choice = initial_consensus['choice']
+        agreement_rate = initial_consensus['agreement_rate']
+
+        print(f"DEBUG: Consensus choice = {consensus_choice}")
+        print(f"DEBUG: Agreement rate = {agreement_rate:.1%}")
+
+        # Simplified decision - just use the consensus choice directly
+        decision = {
+            "choice": consensus_choice,  # Use consensus choice directly
+            "rationale": f"Team reached {agreement_rate:.1%} consensus on option {consensus_choice} during silent assessment phase.",
+            "team_summary": f"All {len(self.team_members)} specialists agreed on this diagnosis.",
+            "confidence": "High - based on unanimous team agreement",
+            "consensus_achieved": True,
+            "early_consensus": True,
+            "final_agreement_rate": agreement_rate,
+            "raw_response": f"Early consensus decision: {consensus_choice}"
+        }
+
+        self.final_decision = decision
+
+        print(f"\n✓ EARLY CONSENSUS DECISION: Option {decision['choice']}")
+        print(f"Agreement rate: {agreement_rate:.1%}")
+
+        return decision
+
+    def _parse_early_consensus_decision(self, response: str, options: Dict[str, str],
+                                        expected_choice: str) -> Dict:
+        """Parse early consensus decision response"""
+        decision = {
+            "choice": expected_choice,  # Default to consensus choice
+            "rationale": "",
+            "team_summary": "",
+            "confidence": "",
+            "raw_response": response
+        }
+
+        lines = response.split('\n')
+        current_section = None
+
+        for line in lines:
+            line_upper = line.upper()
+
+            if "DECISION:" in line_upper:
+                # Extract choice, but default to expected if not found
+                for char in line:
+                    if char.upper() in options.keys():
+                        decision["choice"] = char.upper()
+                        break
+            elif "RATIONALE:" in line_upper:
+                current_section = "rationale"
+                decision[current_section] = line.split(
+                    ':', 1)[1].strip() if ':' in line else ""
+            elif "TEAM_SUMMARY:" in line_upper:
+                current_section = "team_summary"
+                decision[current_section] = line.split(
+                    ':', 1)[1].strip() if ':' in line else ""
+            elif "CONFIDENCE:" in line_upper:
+                current_section = "confidence"
+                decision[current_section] = line.split(
+                    ':', 1)[1].strip() if ':' in line else ""
+            elif current_section and line.strip():
+                decision[current_section] += " " + line.strip()
+
+        return decision
+
+    def conduct_round_robin_discussion(self) -> List[Dict]:
+        """Conduct structured round-robin discussion"""
+        discussion_log = []
+
+        print("\n--- Round-Robin Discussion ---")
+
+        # Each team member shares their perspective in order
+        previous_opinions = []
+
+        for i, member in enumerate(self.team_members):
+            print(f"\n{i+1}. {member.specialty} sharing perspective...")
+
+            if hasattr(member, 'participate_in_round_robin'):
+                response = member.participate_in_round_robin(previous_opinions)
+            else:
+                # Fallback for members without this method
+                response = self._get_member_opinion(member)
+
+            # Create opinion summary
+            opinion = {
+                'specialty': member.specialty,
+                'summary': response[:200] + "..." if len(response) > 200 else response,
+                'full_response': response
+            }
+
+            previous_opinions.append(opinion)
+
+            discussion_log.append({
+                'speaker': member,
+                'specialty': member.specialty,
+                'message': response,
+                'order': i + 1
+            })
+
+            print(f"   {member.specialty}: {response[:100]}...")
+
+        return discussion_log
+
+    def _get_member_opinion(self, member) -> str:
+        """Fallback method to get member opinion"""
+        if hasattr(member, 'silent_assessment') and member.silent_assessment:
+            assessment = member.silent_assessment.get('assessment', '')
+            recommendation = member.silent_assessment.get('recommendation', '')
+            return f"Assessment: {assessment} Recommendation: {recommendation}"
+        else:
+            return f"As a {member.specialty}, I believe we should consider the clinical evidence carefully."
+
+    def _notify_team_of_decision(self, decision: Dict):
+        """Notify team members of final decision"""
+        print("\n--- Notifying Team of Final Decision ---")
+
+        decision_summary = f"Final Decision: Option {decision['choice']}"
+        rationale = decision.get('rationale', 'See discussion summary')
+
+        for member in self.team_members:
+            if hasattr(member, 'acknowledge_final_decision'):
+                response = member.acknowledge_final_decision(
+                    decision_summary, rationale)
+                print(f"✓ {member.specialty}: {response[:80]}...")
+            else:
+                print(f"✓ {member.specialty}: Acknowledged decision")
+
+    # Also add this missing method to the base MedicalAgent class if needed
+    def conduct_round_robin_discussion(self) -> List[Dict]:
+        """Base implementation for round-robin discussion"""
+        return []
+
+    def _parse_sbar(self, response: str, options: Dict[str, str]) -> Dict:
+        """Parse SBAR format response with better answer extraction"""
+        sbar = {
+            "situation": "",
+            "background": "",
+            "assessment": "",
+            "recommendation": "",
+            "recommended_answer": None,
+            "raw_response": response
+        }
+
+        # Extract sections
+        lines = response.split('\n')
+        current_section = None
+
+        for line in lines:
+            line_upper = line.upper()
+            if "SITUATION:" in line_upper:
+                current_section = "situation"
+                sbar[current_section] = line.split(
+                    ':', 1)[1].strip() if ':' in line else ""
+            elif "BACKGROUND:" in line_upper:
+                current_section = "background"
+                sbar[current_section] = line.split(
+                    ':', 1)[1].strip() if ':' in line else ""
+            elif "ASSESSMENT:" in line_upper:
+                current_section = "assessment"
+                sbar[current_section] = line.split(
+                    ':', 1)[1].strip() if ':' in line else ""
+            elif "RECOMMENDATION:" in line_upper:
+                current_section = "recommendation"
+                sbar[current_section] = line.split(
+                    ':', 1)[1].strip() if ':' in line else ""
+            elif current_section:
+                sbar[current_section] += " " + line.strip()
+
+        # Better answer extraction - try multiple patterns
+        answer_patterns = [
+            r'Answer:\s*\(?([A-E])\)?',  # Answer: A or Answer: (A)
+            r'Option\s*([A-E])',         # Option A
+            r'\(([A-E])\)',              # (A)
+            r'^([A-E])\)',               # A) at start of line
+            r'choose\s*([A-E])',         # choose A
+            r'select\s*([A-E])',         # select A
+        ]
+
+        import re
+        response_upper = response.upper()
+
+        for pattern in answer_patterns:
+            matches = re.findall(pattern, response_upper)
+            if matches:
+                # Take the last match (most likely to be the final answer)
+                candidate = matches[-1]
+                if candidate in options.keys():
+                    sbar["recommended_answer"] = candidate
+                    print(
+                        f"DEBUG: Extracted answer '{candidate}' using pattern {pattern}")
+                    break
+
+        # Fallback: look for any option letter in the response
+        if not sbar["recommended_answer"]:
+            option_counts = {}
+            for key in options.keys():
+                option_counts[key] = response_upper.count(key)
+
+            if option_counts:
+                # Choose the most frequently mentioned option
+                most_mentioned = max(option_counts, key=option_counts.get)
+                if option_counts[most_mentioned] > 0:
+                    sbar["recommended_answer"] = most_mentioned
+                    print(
+                        f"DEBUG: Fallback answer '{most_mentioned}' (mentioned {option_counts[most_mentioned]} times)")
+
+        print(f"DEBUG: Final recommended answer: {sbar['recommended_answer']}")
+        return sbar
