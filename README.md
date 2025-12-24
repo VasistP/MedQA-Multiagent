@@ -395,8 +395,9 @@ Contributions are welcome! Please:
 
 For questions, issues, or collaboration:
 - GitHub Issues: [https://github.com/VasistP/MedQA-Multiagent/issues](https://github.com/VasistP/MedQA-Multiagent/issues)
-- Email: [Your email]
+- Email: pranavvasist2@gmail.com
 
 ---
 
 **Disclaimer**: This is a research tool for educational purposes. It is not intended for clinical use or real medical diagnosis. Always consult qualified healthcare professionals for medical advice.
+
